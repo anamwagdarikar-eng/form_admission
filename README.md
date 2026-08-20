@@ -14,3 +14,19 @@ streamlit run app.py
 ```
 
 The supplied paper form is shown in the sidebar as a visual reference.
+
+## Deploy on Render or Railway
+
+Use the following start command for a web service:
+
+```bash
+streamlit run app.py --server.address=0.0.0.0 --server.port=$PORT
+```
+
+Set the service runtime to Python and install dependencies with:
+
+```bash
+pip install -r requirements.txt
+```
+
+The application writes submitted records to `admission_records.csv` in the running container. Use persistent storage or an external database if records must survive redeployments.
