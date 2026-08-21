@@ -1,18 +1,27 @@
 import csv
 import io
+import json
 import os
 from datetime import date
 
 import qrcode
 import streamlit as st
 from docx import Document
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_ROW_HEIGHT_RULE
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import Inches
 from openpyxl import Workbook
 from openpyxl.styles import Font
 
+try:
+    import psycopg
+except ImportError:
+    psycopg = None
+
 st.set_page_config(page_title="FY Engineering Admission Form", page_icon="📝", layout="wide", initial_sidebar_state="collapsed")
 RECORDS_FILE = "admission_records.csv"
+DATABASE_URL = os.getenv("DATABASE_URL")
 PAYMENT_QR_DATA = "upi://pay?pa=vvpiet@upi&pn=VVP%20Institute%20of%20Engineering%20and%20Technology&cu=INR"
 
 st.markdown("""
@@ -61,6 +70,13 @@ def marks_table(prefix, title):
 
 
 def load_records():
+    if DATABASE_URL:
+        if psycopg is None:
+            raise RuntimeError("DATABASE_URL is configured, but psycopg is not installed.")
+        with psycopg.connect(DATABASE_URL) as connection:
+            ensure_database_table(connection)
+            rows = connection.execute("SELECT record FROM admission_records ORDER BY id").fetchall()
+            return [row[0] for row in rows]
     if not os.path.exists(RECORDS_FILE):
         return []
     with open(RECORDS_FILE, newline="", encoding="utf-8") as file:
@@ -68,6 +84,13 @@ def load_records():
 
 
 def append_record(record):
+    if DATABASE_URL:
+        if psycopg is None:
+            raise RuntimeError("DATABASE_URL is configured, but psycopg is not installed.")
+        with psycopg.connect(DATABASE_URL) as connection:
+            ensure_database_table(connection)
+            connection.execute("INSERT INTO admission_records (record) VALUES (%s)", (json.dumps(record),))
+        return
     records = load_records()
     fields = list(record)
     with open(RECORDS_FILE, "w", newline="", encoding="utf-8") as file:
@@ -76,8 +99,27 @@ def append_record(record):
         writer.writerows(records + [record])
 
 
+def ensure_database_table(connection):
+    connection.execute("CREATE TABLE IF NOT EXISTS admission_records (id BIGSERIAL PRIMARY KEY, submitted_at TIMESTAMPTZ DEFAULT NOW(), record JSONB NOT NULL)")
+
+
 def word_download(record):
     document = Document()
+    photo_table = document.add_table(rows=1, cols=2)
+    photo_table.alignment = WD_TABLE_ALIGNMENT.RIGHT
+    photo_table.autofit = False
+    photo_table.columns[0].width = Inches(4.8)
+    photo_table.columns[1].width = Inches(1.35)
+    photo_table.cell(0, 0).text = ""
+    photo_cell = photo_table.cell(0, 1)
+    photo_cell.text = "ID SIZE PHOTO\n(Attach here)"
+    photo_cell.width = Inches(1.35)
+    photo_table.rows[0].height = Inches(1.55)
+    photo_table.rows[0].height_rule = WD_ROW_HEIGHT_RULE.EXACTLY
+    photo_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+    for paragraph in photo_cell.paragraphs:
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    document.add_paragraph()
     heading = document.add_paragraph()
     heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = heading.add_run("VIDYA VIKAS PRATISHTHAN'S\nVVP INSTITUTE OF ENGINEERING & TECHNOLOGY, SOLAPUR")
@@ -130,6 +172,17 @@ with st.sidebar:
     st.image("admission_form_FY.jpeg", width="stretch")
     st.caption("Original paper form supplied for layout reference.")
 
+if not DATABASE_URL:
+    st.warning("Persistent storage is not configured. Set DATABASE_URL before deploying to Render.")
+
+form_type = st.selectbox("Select admission form", ["FY", "SY", "DSE", "TY", "B.Tech"], key="form_type")
+
+if form_type != "FY":
+    st.subheader(f"{form_type} Admission Form")
+    st.image("admission_form_SY.jpeg", use_container_width=True)
+    st.info("The supplied SY admission form is shown for SY, DSE, TY, and B.Tech admissions.")
+    st.stop()
+
 st.markdown('<div class="paper">', unsafe_allow_html=True)
 st.markdown("""
 <div class="masthead"><div class="seal">VVP<br>INSTITUTE<br>SEAL</div><div><p>VIDYA VIKAS PRATISHTHAN'S</p><h1>VVP INSTITUTE OF ENGINEERING &amp; TECHNOLOGY, SOLAPUR</h1><p>NAAC Accredited &amp; ISO 9001 : 2015 Certified Institute</p><p>Approved by AICTE New Delhi &amp; Affiliated to DBATU, Lonere</p><p><b>72 / 2 B, Pratapnagar, Soregaon-Dongare Road, Solapur - 413008</b></p><p>Phone: 8380305555 &nbsp; Email: vvpiet@rediffmail.com &nbsp; Website: www.vvpengg.org</p></div><div class="photo">PHOTO</div></div>
@@ -178,6 +231,21 @@ with st.form("admission_form"):
     for index, branch in enumerate(branches):
         if branch_cols[index % 2].checkbox(f"{index + 1}. {branch}", key=f"branch_{index}"):
             selected_branches.append(branch)
+    st.markdown("**Documents Submitted** <span class='mr'>सादर केलेली कागदपत्रे</span>", unsafe_allow_html=True)
+    documents = [
+        "SSC Marksheet / Certificate",
+        "HSC Marksheet / Certificate",
+        "AADHAR",
+        "LC",
+        "Domicile Certificate",
+        "Caste Certificate",
+        "Caste Validity",
+        "Non-Creamy Layer Certificate",
+    ]
+    submitted_documents = [
+        document for index, document in enumerate(documents)
+        if st.checkbox(document, key=f"document_{index}")
+    ]
     st.markdown("**Payment Details** <span class='mr'>देयक तपशील</span>", unsafe_allow_html=True)
     payment_mode = st.radio(label("Payment mode", "देयक पद्धत"), ["Online", "Offline"], horizontal=True, key="payment_mode")
     if payment_mode == "Online":
@@ -193,7 +261,7 @@ if submitted:
     elif payment_mode == "Offline" and not payment_reference.strip():
         st.error("Enter the offline receipt number before submitting.")
     else:
-        record = {"Submitted On": str(date.today()), "Full Name": full_name, "Father Name": father_name, "Mother Name": mother_name, "Address": address, "Pin Code": pin_code, "Permanent Address": permanent_address, "Permanent Pin": permanent_pin, "Residence Phone": residence_phone, "Parent Phone": parent_phone, "Candidate No": candidate_no, "Email": email, "Sex": sex, "Nationality": nationality, "Religion": religion, "Caste": caste, "Sub Caste": sub_caste, "Passing Year": passing_year, "Qualifying Marks": str(qualifying_marks), "Entrance Marks": str(entrance_marks), "SSC School": ssc_school, "SSC Board": ssc_board, "SSC Year": ssc_year, "SSC Marks": ssc_marks, "Selected Branches": ", ".join(selected_branches), "Payment Mode": payment_mode, "Payment Reference": payment_reference}
+        record = {"Form Type": form_type, "Submitted On": str(date.today()), "Full Name": full_name, "Father Name": father_name, "Mother Name": mother_name, "Address": address, "Pin Code": pin_code, "Permanent Address": permanent_address, "Permanent Pin": permanent_pin, "Residence Phone": residence_phone, "Parent Phone": parent_phone, "Candidate No": candidate_no, "Email": email, "Sex": sex, "Nationality": nationality, "Religion": religion, "Caste": caste, "Sub Caste": sub_caste, "Passing Year": passing_year, "Qualifying Marks": str(qualifying_marks), "Entrance Marks": str(entrance_marks), "SSC School": ssc_school, "SSC Board": ssc_board, "SSC Year": ssc_year, "SSC Marks": ssc_marks, "Selected Branches": ", ".join(selected_branches), "Documents Submitted": ", ".join(submitted_documents), "Payment Mode": payment_mode, "Payment Reference": payment_reference}
         append_record(record)
         st.session_state["last_record"] = record
         st.success("Admission submitted and added to the admission register.")

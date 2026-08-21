@@ -1,6 +1,6 @@
 # FY Engineering Admission Form
 
-Streamlit implementation of the supplied first-year engineering admission form, with English labels and Marathi subtitles. Submitted admissions are stored locally in `admission_records.csv`.
+Streamlit implementation of the supplied engineering admission forms, with English labels and Marathi subtitles. FY is an editable form; SY, DSE, TY, and B.Tech display the supplied SY-style form reference.
 
 The browser form supports online payment with a QR code or offline payment with a required receipt number. The Word download includes the office-use section; the browser form does not.
 
@@ -29,4 +29,4 @@ Set the service runtime to Python and install dependencies with:
 pip install -r requirements.txt
 ```
 
-The application writes submitted records to `admission_records.csv` in the running container. Use persistent storage or an external database if records must survive redeployments.
+For Render, deploy with the included `render.yaml` Blueprint. It creates a PostgreSQL database and injects its connection string as `DATABASE_URL` into the web service. Submissions stored there survive browser refreshes, service restarts, and redeployments. If configuring Render manually, create a PostgreSQL database and add its connection string as the `DATABASE_URL` environment variable. Without it, local development uses `admission_records.csv` as a fallback; Render's default filesystem is temporary, so the CSV fallback is not persistent there.
